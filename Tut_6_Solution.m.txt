@@ -1,0 +1,178 @@
+%% This is a program to perform a PF on a 1-D 'robot'.
+% it is assumed that the robot can move in only the positive
+% direction along the x-axis. It is also assumed that the robot has a range
+% sensor - to use the sensor call 'range_sensor' function
+%
+
+clear
+close all
+clc
+
+% open 4 figure windows for displaying
+set(figure(1),'Position',[17 249 310 257])    % showing the actual robot and estimated motion
+
+set(figure(2),'Position',[339 251 343 253])     % error plot
+line1=line(1,0,'LineStyle','-','Color','r');
+
+set(figure(3),'Position',[716 243 310 257])     % particle motion
+set(figure(4),'Position',[1068 251 343 253])    % weight distribution
+
+% generate position for the robot
+%  assuming the robot is actually moving forward along the +ve direction of
+%  X-axis
+dt=0.05; % -- 0.05 sec time step
+v=0.1; % control signal of 0.1m/s
+v_std=0.05; % STD of the control signal is 0.05 m/s
+total_time = 10;    % total simulation time of 10 sec
+total_step=round(total_time/dt);    % total processing steps
+
+% the actual robot location
+x(1)=1;                     % start from x=1;
+load robpos.mat             % get the Actual Robot Position from the file.
+y=zeros(size(x));           % along x axis
+
+robx_est = zeros(size(x));              % initialise the estimated position
+roby_est = zeros(size(x));              % initialise the estimated position
+robth_est = zeros(size(x));              % initialise the estimated position
+
+%%
+% maximum iterations
+itmax=total_step;
+
+% measurement noise characteristic 
+rrs=1e-4;           % distance measurement noise variance
+rr=sqrt(rrs);       % STD
+
+%% generate the particles for robot states - part_number particles
+% it is assumed that the robot space is a [0 4.5] m space
+%
+part_number=100;        % total particles
+x_max=4.5;               % robot will be in the location of [0 4.5] m
+
+robpx=x_max*rand(part_number,1);    % particle location
+robpy=zeros(part_number,1);         % y position of the robot is 0.
+wn=ones(part_number,1)./part_number;         % start with uniform weight for each particle
+
+% plot the initial particles
+figure(3)
+plot(robpx,robpy,'r*')
+title('Particle locations')
+disp('hit "Enter"')
+pause
+
+%% landmark locations
+% there 1 landmark
+
+lmk=[3 1];
+            
+%% plot the actual car locations and the landmark location
+
+figure(1)
+title('Robot position, actual and estimated and Landmark locations')
+plot(x(1),y(1),'r+','MarkerSize',20,'LineWidth',2.5)
+hold on
+plot(lmk(:,1),lmk(:,2),'b*','MarkerSize',20,'LineWidth',1.5)
+xaxis=-1:0.01:5;
+plot(xaxis,zeros(size(xaxis)),'r')
+axis([-1 5 -1 3])
+grid on
+hold off
+
+% initialising the estimation errors to zero and plot the errors.
+%
+ite=2;
+x_err=zeros(size(robpx(1,:)));
+
+figure(2)
+line1.XData = [line1.XData];    % for showing the error plotting
+line1.YData = [line1.YData];
+title('Estimation error')
+grid on
+
+
+%% start the PF
+fprintf('Starting Particle Filtering ... \n')
+% predict the likelyhood of each particle according to the measurements.
+% 
+while ite<=itmax                        % iterate through the time frame    
+    act_meas=range_sensor(x(:,ite));    % get the 'actual sensor reading
+    for ip=1:part_number                % do it for each particle
+        % predict measurements
+        pred_meas = [];                 % clear the predicted measurement
+        dx=lmk(:,1)-robpx(ip);
+        dy=lmk(:,2);
+        r_pred=(dx.*dx+dy.*dy).^0.5;            %range prediction
+        
+        pred_meas=r_pred;
+
+        % calculate the weight of each particle depend on the closeness
+        % of the predicted meansurement and the real measurements
+        % The real measurment plays the role of the mean/expected value
+        wn(ip)=wn(ip)*normpdf(pred_meas(1),act_meas(1),rr);  % update the weight
+    end
+    figure(4)
+    plot(wn,'*');               % try to see how the weighting is distributed
+    title('Weight distribution');
+    
+    fprintf('Iteration %d/%d. \t',ite,itmax)    
+
+    if sum(wn)==0      % if nothing matches, then re-generate particles
+        fprintf('No good! Restarting... \n');
+        robpx=x_max*rand(part_number,1);    % particle location
+        wn=ones(part_number,1)./part_number;
+    else                % otherwise use the weight to estimate the location
+        wn=wn/sum(wn);  % normalise weight
+        robx_est(ite)=sum(robpx.*wn);   % estimate robot location according to weighted particle locations
+
+        x_err(ite)=x(1,ite)-robx_est(ite);
+        
+        figure(1)
+        plot(x,y,'b-',robx_est(ite),y(ite),'r*',x(ite),y(ite),'b+',...
+            lmk(:,1),lmk(:,2),'r+',...
+            'MarkerSize',6)
+        title('Robot position, actual and estimated and Landmark locations')
+        axis([0 4 -1 3])
+        grid on
+       
+        % ===== the most important step!!!!!! ===========
+        % regenerate the particle using weight wn
+        % ========================================
+        % In the resampling step, new particles are randomly selected, with replacement,
+        % from the set of weighted particles. The probability of selecting a particle is proportional
+        % to its weight and the number of particles remains unchanged. Particles with higher
+        % weights are likely to be duplicated, whereas low weight particles are likely to be removed.
+        
+        % A new index array is selected based on the weight value wn
+        % For example with 3 particles: (1,0.2), (2,0.2), (3,0.6)
+        % The index array after running randsample can be [3 3 1]
+        % since index 3 has a higher weight
+        idx=randsample(part_number,part_number,true,wn);
+        wn=wn(idx);    % update the weight value
+        wn=wn/sum(wn); % scale the weights
+
+        vv=v+v_std*randn(size(robpx));      % generate the noisy input signal for each particle
+
+        % move every particle
+        % Note: particles now are determined by the resampled index array
+        robpx=robpx(idx)+vv*dt;    
+
+        figure(3)
+        plot(robpx,robpy,'r.')      % plot the remaining particles
+        title('Particle locations')
+
+        fprintf('Actual pos %5.4f   ',x(ite));
+        fprintf('Est pos %5.4f ',robx_est(ite));
+        fprintf('Estimation error is: %5.4f \n',x(ite)-robx_est(ite));
+
+        figure(2)
+        line1.XData=[line1.XData ite];
+        line1.YData=[line1.YData x_err(ite)];
+        legend('x err')
+
+        ite=ite+1;
+        pause(0.1)  % for display
+    end
+end
+
+fprintf('Finished!! \n\n\n')
+
