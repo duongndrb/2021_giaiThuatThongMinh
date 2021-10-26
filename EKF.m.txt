@@ -1,0 +1,156 @@
+% Tut 5: Extended Kalman Filter
+% 
+clear all
+close all
+
+dt = 0.01;       % time step;
+runTime = 5; % total run time
+step=floor(runTime/dt);
+vl = 0.1; % nominal left velocity
+vr = 0.12; % nominal right velocity
+d = 0.5; % distance between the wheels
+
+% Landmarks
+x_A = 1;
+y_A = 3;
+
+x_B = 2;
+y_B = 3;
+
+x_C = 4;
+y_C = 4;
+
+P(:,:,1)=[0 0 0;0 0 0;0 0 0];     % initial error covarience matrix
+
+% Initial location
+x(1) = 0;  
+y(1) = 0;
+theta(1) = 0;
+
+% Initial actual location
+xa(1) = 0;  
+ya(1) = 0;
+thetaa(1) = 0;
+
+% Initial prediction location
+xp(1) = 0;  
+yp(1) = 0;
+thetap(1) = 0;
+
+Q=[(2*10^-2) 0; 0 (3*10^-2)];   % variance of the input noise.
+R=[(10^-5) 0 0 ;...
+    0 (10^-5) 0 ;...
+    0 0 (10^-5)];  % variance of the measurement noise.
+
+% Measurements
+z(:,1)=[0;0;0];
+
+% Actual input velocities 
+% subjected to noise with zero mean and variance Q
+vl_var = Q(1,1); % Noise variance of vl 
+vl_std = sqrt(vl_var); % Noise standard deviation of vl 
+vl_noise = vl_std*randn(step,1); % Generate vl noise for all steps
+vl_a = repmat(vl,step,1) +  vl_noise;
+
+vr_var = Q(2,2); % Noise variance of vl 
+vr_std = sqrt(vr_var); % Noise standard deviation of vl 
+vr_noise = vr_std*randn(step,1); % Generate vl noise for all steps
+vr_a = repmat(vr,step,1) +  vr_noise;
+
+% Generate measurement noise
+z_var = R(1,1); % Noise variance of z 
+z_std = sqrt(z_var); % Noise standard deviation of z 
+z_noise = z_std*randn(3,step); % Generate z noise (3 rows) for all steps
+
+
+for k=2:step
+    % Actual value
+    xa(k) = xa(k-1) + (vl_a(k-1)+vr_a(k-1))/2*cos(thetaa(k-1))*dt;
+    ya(k) = ya(k-1) + (vl_a(k-1)+vr_a(k-1))/2*sin(thetaa(k-1))*dt;
+    thetaa(k) = thetaa(k-1) + (vr_a(k-1)-vl_a(k-1))/d*dt;
+
+    % Prediction based on system model only (no Kalman Filter)
+    xp(k) = xp(k-1) + (vr+vl)/2*cos(thetap(k-1))*dt;
+    yp(k) = yp(k-1) + (vr+vl)/2*sin(thetap(k-1))*dt;
+    thetap(k) = thetap(k-1) + (vr-vl)/d*dt;
+
+    % Kalman filter
+    % Prediction phase
+    x(k) = x(k-1) + (vr+vl)/2*cos(theta(k-1))*dt;
+    y(k) = y(k-1) + (vr+vl)/2*sin(theta(k-1))*dt;
+    theta(k) = theta(k-1) + (vr-vl)/d*dt;
+    
+    A=[1 0 -(vr+vl)/2*sin(theta(k-1))*dt;...
+        0 1 (vr+vl)/2*cos(theta(k-1))*dt;...
+        0 0 1];
+    W = [1/2*cos(theta(k-1))*dt 1/2*cos(theta(k-1))*dt;...
+         1/2*sin(theta(k-1))*dt 1/2*sin(theta(k-1))*dt;...
+         1/d*dt -1/d*dt];
+
+    H=[(x(k-1)-x_A)/sqrt((x(k-1)-x_A)^2 + (y(k-1)-y_A)^2)...
+       (y(k-1)-y_A)/sqrt((x(k-1)-x_A)^2 + (y(k-1)-y_A)^2) 0;...
+       (x(k-1)-x_B)/sqrt((x(k-1)-x_B)^2 + (y(k-1)-y_B)^2)...
+       (y(k-1)-y_B)/sqrt((x(k-1)-x_B)^2 + (y(k-1)-y_B)^2) 0;...
+       (x(k-1)-x_C)/sqrt((x(k-1)-x_C)^2 + (y(k-1)-y_C)^2)...
+       (y(k-1)-y_C)/sqrt((x(k-1)-x_C)^2 + (y(k-1)-y_C)^2) 0];
+
+    Pe(:,:,k)=A*P(:,:,k-1)*A' + W*Q*W'; % update error covariance matrix  
+    K(:,:,k)=Pe(:,:,k)*H'/(H*Pe(:,:,k)*H'+R);  % Kalman gain
+    
+    % Measurement prediction
+    rA = sqrt((x(k)-x_A)^2 + (y(k)-y_A)^2);
+    rB = sqrt((x(k)-x_B)^2 + (y(k)-y_B)^2);
+    rC = sqrt((x(k)-x_C)^2 + (y(k)-y_C)^2);
+    z_pre(:,k) = [rA;rB;rC];
+
+    % Actual Measurements
+    rA_a = sqrt((xa(k)-x_A)^2 + (ya(k)-y_A)^2);
+    rB_b = sqrt((xa(k)-x_B)^2 + (ya(k)-y_B)^2);
+    rC_c = sqrt((xa(k)-x_C)^2 + (ya(k)-y_C)^2);
+    z(:,k) = [rA_a;rB_b;rC_c]+z_noise(:,k);
+    
+
+    X_pre(:,k) = [x(k);y(k);theta(k)];  % Prediction phase
+    
+    % Correction 
+    r(:,k)=z(:,k)-z_pre(:,k); % Inovation
+    X = X_pre(:,k) + K(:,:,k)*r(:,k);  % Kalman Estimated location
+    x(k) = X(1);
+    y(k) = X(2);
+    z(k) = X(3);
+
+    P(:,:,k)=(eye(3)-K(:,:,k)*H)*Pe(:,:,k); % Estimation covariance error%
+end
+
+% plot the results
+time=0:step-1;
+figure(1)
+plot(x,y,xp,yp,xa,ya,'--')
+xlabel('X (m)');
+ylabel('Y (m)');
+legend('Kalman','Prediction','Actual','Location','SouthEast' )
+title('Actual and Estimated Trajectories')
+
+figure(2)
+plot(time,x-xa,time,xp-xa,'--')
+legend('Kalman error','Prediction error')
+xlabel('Time (step)');
+ylabel('Error (m)');
+title('Error in X')
+grid
+
+figure(3)
+plot(time,y-ya,time,yp-ya,'--')
+xlabel('Time (step)');
+ylabel('Error (m)');
+legend('Kalman error','Prediction error')
+title('Error in Y')
+grid
+
+figure(4)
+plot(time,theta-thetaa,time,thetap-thetaa,'--')
+xlabel('Time (step)');
+ylabel('Error (rad)');
+legend('Kalman error','Prediction error')
+title('Error in Theta')
+grid
